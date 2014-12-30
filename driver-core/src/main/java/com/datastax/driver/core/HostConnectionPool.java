@@ -272,7 +272,7 @@ class HostConnectionPool {
             // closed the pool.
             return;
         }
-
+        
         if (trash.contains(connection)) {
             if (inFlight == 0 && trash.remove(connection))
                 close(connection);
