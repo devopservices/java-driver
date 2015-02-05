@@ -290,6 +290,7 @@ class HostConnectionPool {
     // Trash the connection and create a new one, but we don't call trashConnection
     // directly because we want to make sure the connection is always trashed.
     private void replaceConnection(PooledConnection connection) {
+        // TODO close directly instead?
         if (!connection.state.compareAndSet(OPEN, TRASHED))
             return;
         open.decrementAndGet();
@@ -384,16 +385,24 @@ class HostConnectionPool {
     }
 
     private PooledConnection tryResurrectFromTrash() {
-        long now = System.currentTimeMillis();
-        for (PooledConnection connection : trash)
-            if (connection.maxIdleTime >= now
-                && connection.maxAvailableStreams() > MIN_AVAILABLE_STREAMS
-                && connection.state.compareAndSet(TRASHED, OPEN)) {
-                logger.trace("Resurrecting {}", connection);
-                trash.remove(connection);
-                return connection;
-            }
-        return null;
+        long highestMaxIdleTime = System.currentTimeMillis();
+        PooledConnection chosen = null;
+
+        while (true) {
+            for (PooledConnection connection : trash)
+                if (connection.maxIdleTime > highestMaxIdleTime && connection.maxAvailableStreams() > MIN_AVAILABLE_STREAMS) {
+                    chosen = connection;
+                    highestMaxIdleTime = connection.maxIdleTime;
+                }
+
+            if (chosen == null)
+                return null;
+            else if (chosen.state.compareAndSet(TRASHED, OPEN))
+                break;
+        }
+        logger.trace("Resurrecting {}", chosen);
+        trash.remove(chosen);
+        return chosen;
     }
 
     private void maybeSpawnNewConnection() {
