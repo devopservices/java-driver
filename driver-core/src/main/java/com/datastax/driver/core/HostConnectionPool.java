@@ -321,8 +321,8 @@ class HostConnectionPool {
     }
 
     private void doTrashConnection(PooledConnection connection) {
-        trash.add(connection);
         connections.remove(connection);
+        trash.add(connection);
     }
 
     private boolean addConnectionIfUnderMaximum() {
