@@ -344,8 +344,10 @@ class HostConnectionPool {
         // Now really open the connection
         try {
             PooledConnection newConnection = tryResurrectFromTrash();
-            if (newConnection == null)
+            if (newConnection == null) {
+                logger.debug("Creating new connection on busy pool to {}", host);
                 newConnection = manager.connectionFactory().open(this);
+            }
             connections.add(newConnection);
 
             // We might have raced with pool shutdown since the last check; ensure the connection gets closed in case the pool did not do it.
@@ -413,7 +415,6 @@ class HostConnectionPool {
                 break;
         }
 
-        logger.debug("Creating new connection on busy pool to {}", host);
         manager.blockingExecutor().submit(newConnectionTask);
     }
 
