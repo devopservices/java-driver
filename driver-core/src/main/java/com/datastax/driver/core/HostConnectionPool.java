@@ -290,7 +290,6 @@ class HostConnectionPool {
     // Trash the connection and create a new one, but we don't call trashConnection
     // directly because we want to make sure the connection is always trashed.
     private void replaceConnection(PooledConnection connection) {
-        // TODO close directly instead?
         if (!connection.state.compareAndSet(OPEN, TRASHED))
             return;
         open.decrementAndGet();
