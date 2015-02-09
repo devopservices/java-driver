@@ -25,7 +25,7 @@ class PooledConnection extends Connection {
 
     final HostConnectionPool pool;
 
-    enum State {OPEN, TRASHED, GONE }
+    enum State {OPEN, TRASHED, RESURRECTING, GONE }
 
     final AtomicReference<State> state = new AtomicReference<State>(State.OPEN);
 

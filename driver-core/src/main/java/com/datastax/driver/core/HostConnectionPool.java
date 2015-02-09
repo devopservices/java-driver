@@ -350,6 +350,8 @@ class HostConnectionPool {
             }
             connections.add(newConnection);
 
+            newConnection.state.compareAndSet(RESURRECTING, OPEN); // no-op if it was already OPEN
+
             // We might have raced with pool shutdown since the last check; ensure the connection gets closed in case the pool did not do it.
             if (isClosing && !newConnection.isClosed()) {
                 close(newConnection);
@@ -398,7 +400,7 @@ class HostConnectionPool {
 
             if (chosen == null)
                 return null;
-            else if (chosen.state.compareAndSet(TRASHED, OPEN))
+            else if (chosen.state.compareAndSet(TRASHED, RESURRECTING))
                 break;
         }
         logger.trace("Resurrecting {}", chosen);
