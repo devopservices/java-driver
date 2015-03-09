@@ -55,6 +55,10 @@ class HostConnectionPool {
 
     final List<PooledConnection> connections;
     private final AtomicInteger open;
+    /** The total number of in-flight requests on all connections of this pool. */
+    private final AtomicInteger totalInFlight = new AtomicInteger();
+    /** The maximum value of {@link #totalInFlight} since the last call to {@link #cleanupIdleConnections(long)}*/
+    private final AtomicInteger maxTotalInFlight = new AtomicInteger();
     final Set<PooledConnection> trash = new CopyOnWriteArraySet<PooledConnection>();
 
     private volatile int waiter = 0;
@@ -135,6 +139,7 @@ class HostConnectionPool {
                 manager.blockingExecutor().submit(newConnectionTask);
             }
             PooledConnection c = waitForConnection(timeout, unit);
+            totalInFlight.incrementAndGet();
             c.setKeyspace(manager.poolsState.keyspace);
             return c;
         }
@@ -148,9 +153,6 @@ class HostConnectionPool {
                 leastBusy = connection;
             }
         }
-
-        if (minInFlight >= options().getMaxSimultaneousRequestsPerConnectionThreshold(hostDistance) && connections.size() < options().getMaxConnectionsPerHost(hostDistance))
-            maybeSpawnNewConnection();
 
         if (leastBusy == null) {
             // We could have raced with a shutdown since the last check
@@ -173,6 +175,24 @@ class HostConnectionPool {
                     break;
             }
         }
+
+        int totalInFlightCount = totalInFlight.incrementAndGet();
+        // update max atomically:
+        while (true) {
+            int oldMax = maxTotalInFlight.get();
+            if (totalInFlightCount <= oldMax || maxTotalInFlight.compareAndSet(oldMax, totalInFlightCount))
+                break;
+        }
+
+        int connectionCount = open.get() + scheduledForCreation.get();
+        if (connectionCount < options().getMaxConnectionsPerHost(hostDistance)) {
+            // Add a connection if we fill the first n-1 connections and almost fill the last one
+            int currentCapacity = (connectionCount - 1) * StreamIdGenerator.MAX_STREAM_PER_CONNECTION
+                + options().getMaxSimultaneousRequestsPerConnectionThreshold(hostDistance);
+            if (totalInFlightCount > currentCapacity)
+                maybeSpawnNewConnection();
+        }
+
         leastBusy.setKeyspace(manager.poolsState.keyspace);
         return leastBusy;
     }
@@ -263,7 +283,8 @@ class HostConnectionPool {
     }
 
     public void returnConnection(PooledConnection connection) {
-        int inFlight = connection.inFlight.decrementAndGet();
+        connection.inFlight.decrementAndGet();
+        totalInFlight.decrementAndGet();
 
         if (isClosed()) {
             close(connection);
@@ -277,9 +298,7 @@ class HostConnectionPool {
         }
 
         if (connection.state.get() != TRASHED) {
-            if (connections.size() > options().getCoreConnectionsPerHost(hostDistance) && inFlight <= options().getMinSimultaneousRequestsPerConnectionThreshold(hostDistance)) {
-                trashConnection(connection);
-            } else if (connection.maxAvailableStreams() < MIN_AVAILABLE_STREAMS) {
+            if (connection.maxAvailableStreams() < MIN_AVAILABLE_STREAMS) {
                 replaceConnection(connection);
             } else {
                 signalAvailableConnection();
@@ -434,6 +453,40 @@ class HostConnectionPool {
     }
 
     void cleanupIdleConnections(long now) {
+        if (isClosed())
+            return;
+
+        shrinkIfBelowCapacity();
+        cleanupTrash(now);
+    }
+
+    /** If we have more active connections than needed, trash some of them */
+    private void shrinkIfBelowCapacity() {
+        int currentLoad = maxTotalInFlight.getAndSet(0);
+
+        int needed = currentLoad / StreamIdGenerator.MAX_STREAM_PER_CONNECTION + 1;
+        if (currentLoad % StreamIdGenerator.MAX_STREAM_PER_CONNECTION > options().getMaxSimultaneousRequestsPerConnectionThreshold(hostDistance))
+            needed += 1;
+        needed = Math.max(needed, options().getCoreConnectionsPerHost(hostDistance));
+        int actual = open.get();
+        int toTrash = Math.max(0, actual - needed);
+
+        logger.trace("Current inFlight = {}, {} connections needed, {} connections available, trashing {}",
+            currentLoad, needed, actual, toTrash);
+
+        if (toTrash <= 0)
+            return;
+
+        for (PooledConnection connection : connections)
+            if (trashConnection(connection)) {
+                toTrash -= 1;
+                if (toTrash == 0)
+                    return;
+            }
+    }
+
+    /** Close connections that have been sitting in the trash for too long */
+    private void cleanupTrash(long now) {
         for (PooledConnection connection : trash) {
             if (connection.maxIdleTime < now && connection.state.compareAndSet(TRASHED, GONE)) {
                 if (connection.inFlight.get() == 0) {
