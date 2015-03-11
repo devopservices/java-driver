@@ -16,7 +16,7 @@
 package com.datastax.driver.core;
 
 /**
- * Interface for object that are interested in tracking the latencies
+ * Interface for objects that are interested in tracking the latencies
  * of the driver queries to each Cassandra nodes.
  * <p>
  * An implementation of this interface can be registered against a Cluster
@@ -27,19 +27,29 @@ package com.datastax.driver.core;
 public interface LatencyTracker {
 
     /**
+     * This enum indicates whether a given request was successfully
+     * completed, timed out or threw an exception.
+     */
+    enum QueryResult {
+        SUCCESS, TIMEOUT, EXCEPTION
+    }
+
+    /**
      * A method that is called after each request to a Cassandra node with
      * the duration of that operation.
      * <p>
      * Note that there is no guarantee that this method won't be called
      * concurrently by multiple thread, so implementations should synchronize
      * internally if need be.
-     *
      * @param host the Cassandra host on which a request has been performed.
+     * @param statement the {@link Statement} that has been executed.
      * @param newLatencyNanos the latency in nanoseconds of the operation. This
-     * latency corresponds to the time elapsed between when the query was send
+     * latency corresponds to the time elapsed between when the query was sent
      * to {@code host} and when the response was received by the driver (or the
      * operation timed out, in which {@code newLatencyNanos} will approximately
      * be the timeout value).
+     * @param queryResult An enum indicating whether this request was successfully
+     * completed, timed out or threw an exception.
      */
-    public void update(Host host, long newLatencyNanos);
+    public void update(Host host, Statement statement, long newLatencyNanos, QueryResult queryResult);
 }

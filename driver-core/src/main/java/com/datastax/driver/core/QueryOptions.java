@@ -37,9 +37,17 @@ public class QueryOptions {
      */
     public static final int DEFAULT_FETCH_SIZE = 5000;
 
+    /**
+     * The default threshold for slow queries to be logged by the driver.
+     */
+    public static final long DEFAULT_SLOW_QUERY_THRESHOLD_MS = 5000;
+
     private volatile ConsistencyLevel consistency = DEFAULT_CONSISTENCY_LEVEL;
     private volatile ConsistencyLevel serialConsistency = DEFAULT_SERIAL_CONSISTENCY_LEVEL;
     private volatile int fetchSize = DEFAULT_FETCH_SIZE;
+    private volatile long slowQueryLatencyThresholdMs = DEFAULT_SLOW_QUERY_THRESHOLD_MS;
+    private volatile boolean enableQueryLogger = false;
+    private volatile boolean logQueryParameters = false;
     private volatile Cluster.Manager manager;
 
     /**
@@ -138,4 +146,50 @@ public class QueryOptions {
     public int getFetchSize() {
         return fetchSize;
     }
+
+    public QueryOptions setEnableQueryLogger(boolean enableQueryLogger) {
+        this.enableQueryLogger = enableQueryLogger;
+        return this;
+    }
+
+    public boolean isEnableQueryLogger() {
+        return enableQueryLogger;
+    }
+
+    /**
+     * Set the threshold in milliseconds beyond which queries are considered 'slow'
+     * and logged as such by the driver.
+     *
+     * @param slowQueryLatencyThresholdMs Slow queries threshold in milliseconds. It must be
+     * strictly positive.
+     * @return this {@code QueryOptions} instance.
+     * @throws IllegalArgumentException if {@code slowQueryLatencyThresholdMs &lte; 0}.
+     */
+    public QueryOptions setSlowQueryLatencyThresholdMs(long slowQueryLatencyThresholdMs) {
+        if (slowQueryLatencyThresholdMs <= 0)
+            throw new IllegalArgumentException("Invalid slowQueryLatencyThresholdMs, should be > 0, got " + slowQueryLatencyThresholdMs);
+        this.slowQueryLatencyThresholdMs = slowQueryLatencyThresholdMs;
+        return this;
+    }
+
+    /**
+     * The threshold in milliseconds beyond which queries are considered 'slow'
+     * and logged as such by the driver.
+     *
+     * @return the threshold in milliseconds beyond which queries are considered 'slow'
+     * and logged as such by the driver.
+     */
+    public long getSlowQueryLatencyThresholdMs() {
+        return slowQueryLatencyThresholdMs;
+    }
+
+    public QueryOptions setLogQueryParameters(boolean logQueryParameters) {
+        this.logQueryParameters = logQueryParameters;
+        return this;
+    }
+
+    public boolean isLogQueryParameters() {
+        return logQueryParameters;
+    }
+
 }

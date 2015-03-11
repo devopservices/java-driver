@@ -1162,6 +1162,11 @@ public class Cluster implements Closeable {
 
             this.metrics = configuration.getMetricsOptions() == null ? null : new Metrics(this);
             this.listeners = new CopyOnWriteArraySet<Host.StateListener>(listeners);
+
+            QueryOptions queryOptions = configuration.getQueryOptions();
+            if(queryOptions.isEnableQueryLogger()) {
+                trackers.add(new QueryLogger(queryOptions.getSlowQueryLatencyThresholdMs(), true));
+            }
         }
 
         // Initialization is not too performance intensive and in practice there shouldn't be contention
@@ -1280,9 +1285,9 @@ public class Cluster implements Closeable {
             return sessions.remove(session);
         }
 
-        void reportLatency(Host host, long latencyNanos) {
+        void reportLatency(Host host, Statement statement, long latencyNanos, LatencyTracker.QueryResult queryResult) {
             for (LatencyTracker tracker : trackers) {
-                tracker.update(host, latencyNanos);
+                tracker.update(host, statement, latencyNanos, queryResult);
             }
         }
 

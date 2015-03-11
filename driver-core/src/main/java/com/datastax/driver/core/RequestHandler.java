@@ -306,6 +306,10 @@ class RequestHandler implements Connection.ResponseCallback {
         }
 
         Host queriedHost = current;
+
+        if (queriedHost != null)
+            manager.cluster.manager.reportLatency(queriedHost, statement, latency, LatencyTracker.QueryResult.SUCCESS);
+
         boolean releaseConnection = true;
         try {
             switch (response.type) {
@@ -474,8 +478,6 @@ class RequestHandler implements Connection.ResponseCallback {
             if (releaseConnection && connection instanceof PooledConnection)
                 ((PooledConnection)connection).release();
 
-            if (queriedHost != null)
-                manager.cluster.manager.reportLatency(queriedHost, latency);
         }
     }
 
@@ -579,7 +581,7 @@ class RequestHandler implements Connection.ResponseCallback {
             setFinalException(null, new DriverInternalError("An unexpected error happened while handling exception " + exception, e));
         } finally {
             if (queriedHost != null)
-                manager.cluster.manager.reportLatency(queriedHost, latency);
+                manager.cluster.manager.reportLatency(queriedHost, statement, latency, LatencyTracker.QueryResult.EXCEPTION);
         }
     }
 
@@ -607,7 +609,7 @@ class RequestHandler implements Connection.ResponseCallback {
             setFinalException(null, new DriverInternalError("An unexpected error happened while handling timeout", e));
         } finally {
             if (queriedHost != null)
-                manager.cluster.manager.reportLatency(queriedHost, latency);
+                manager.cluster.manager.reportLatency(queriedHost, statement, latency, LatencyTracker.QueryResult.TIMEOUT);
         }
         return true;
     }
