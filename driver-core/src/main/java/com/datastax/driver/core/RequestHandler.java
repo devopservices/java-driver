@@ -31,12 +31,7 @@ import com.codahale.metrics.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.datastax.driver.core.exceptions.DriverException;
-import com.datastax.driver.core.exceptions.DriverInternalError;
-import com.datastax.driver.core.exceptions.NoHostAvailableException;
-import com.datastax.driver.core.exceptions.ReadTimeoutException;
-import com.datastax.driver.core.exceptions.UnavailableException;
-import com.datastax.driver.core.exceptions.WriteTimeoutException;
+import com.datastax.driver.core.exceptions.*;
 import com.datastax.driver.core.policies.*;
 import com.datastax.driver.core.policies.RetryPolicy.RetryDecision.Type;
 
@@ -307,10 +302,8 @@ class RequestHandler implements Connection.ResponseCallback {
 
         Host queriedHost = current;
 
-        if (queriedHost != null)
-            manager.cluster.manager.reportLatency(queriedHost, statement, latency, LatencyTracker.QueryResult.SUCCESS);
-
         boolean releaseConnection = true;
+        Exception exceptionToReport = null;
         try {
             switch (response.type) {
                 case RESULT:
@@ -329,6 +322,7 @@ class RequestHandler implements Connection.ResponseCallback {
                                 metrics().getErrorMetrics().getReadTimeouts().inc();
 
                             ReadTimeoutException rte = (ReadTimeoutException)err.infos;
+                            exceptionToReport = rte;
                             retry = retryPolicy.onReadTimeout(statement,
                                                               rte.getConsistencyLevel(),
                                                               rte.getRequiredAcknowledgements(),
@@ -349,6 +343,7 @@ class RequestHandler implements Connection.ResponseCallback {
                                 metrics().getErrorMetrics().getWriteTimeouts().inc();
 
                             WriteTimeoutException wte = (WriteTimeoutException)err.infos;
+                            exceptionToReport = wte;
                             retry = retryPolicy.onWriteTimeout(statement,
                                                                wte.getConsistencyLevel(),
                                                                wte.getWriteType(),
@@ -369,6 +364,7 @@ class RequestHandler implements Connection.ResponseCallback {
                                 metrics().getErrorMetrics().getUnavailables().inc();
 
                             UnavailableException ue = (UnavailableException)err.infos;
+                            exceptionToReport = ue;
                             retry = retryPolicy.onUnavailable(statement,
                                                               ue.getConsistencyLevel(),
                                                               ue.getRequiredReplicas(),
@@ -385,7 +381,9 @@ class RequestHandler implements Connection.ResponseCallback {
                         case OVERLOADED:
                             // Try another node
                             logger.warn("Host {} is overloaded, trying next host.", connection.address);
-                            logError(connection.address, new DriverException("Host overloaded"));
+                            DriverException overloaded = new DriverException("Host overloaded");
+                            exceptionToReport = overloaded;
+                            logError(connection.address, overloaded);
                             if (metricsEnabled())
                                 metrics().getErrorMetrics().getOthers().inc();
                             retry(false, null);
@@ -394,6 +392,7 @@ class RequestHandler implements Connection.ResponseCallback {
                             // Defunct connection and try another node
                             logger.warn("{} replied with server error ({}), trying next host.", connection.address, err.message);
                             DriverException exception = new DriverException("Host replied with server error: " + err.message);
+                            exceptionToReport = exception;
                             logError(connection.address, exception);
                             connection.defunct(exception);
                             if (metricsEnabled())
@@ -403,7 +402,9 @@ class RequestHandler implements Connection.ResponseCallback {
                         case IS_BOOTSTRAPPING:
                             // Try another node
                             logger.error("Query sent to {} but it is bootstrapping. This shouldn't happen but trying next host.", connection.address);
-                            logError(connection.address, new DriverException("Host is bootstrapping"));
+                            DriverException bootstrapping = new DriverException("Host is bootstrapping");
+                            exceptionToReport = bootstrapping;
+                            logError(connection.address, bootstrapping);
                             if (metricsEnabled())
                                 metrics().getErrorMetrics().getOthers().inc();
                             retry(false, null);
@@ -434,12 +435,14 @@ class RequestHandler implements Connection.ResponseCallback {
                             logger.info("Query {} is not prepared on {}, preparing before retrying executing. "
                                       + "Seeing this message a few times is fine, but seeing it a lot may be source of performance problems",
                                         toPrepare.getQueryString(), connection.address);
+                            exceptionToReport = new DriverException("Query not prepared");
 
                             releaseConnection = false; // we're reusing it for the prepare call
                             write(connection, prepareAndRetry(toPrepare.getQueryString()));
                             // we're done for now, the prepareAndRetry callback will handle the rest
                             return;
                         default:
+                            exceptionToReport = new DriverException(String.format("Server error %s", err.code));
                             if (metricsEnabled())
                                 metrics().getErrorMetrics().getOthers().inc();
                             break;
@@ -473,11 +476,13 @@ class RequestHandler implements Connection.ResponseCallback {
                     break;
             }
         } catch (Exception e) {
+            exceptionToReport = e;
             setFinalException(connection, e);
         } finally {
             if (releaseConnection && connection instanceof PooledConnection)
                 ((PooledConnection)connection).release();
-
+            if (queriedHost != null)
+                manager.cluster.manager.reportLatency(queriedHost, statement, exceptionToReport, latency);
         }
     }
 
@@ -580,8 +585,8 @@ class RequestHandler implements Connection.ResponseCallback {
             // This shouldn't happen, but if it does, we want to signal the callback, not let him hang indefinitively
             setFinalException(null, new DriverInternalError("An unexpected error happened while handling exception " + exception, e));
         } finally {
-            if (queriedHost != null)
-                manager.cluster.manager.reportLatency(queriedHost, statement, latency, LatencyTracker.QueryResult.EXCEPTION);
+            if (queriedHost != null && statement != null)
+                manager.cluster.manager.reportLatency(queriedHost, statement, exception, latency);
         }
     }
 
@@ -596,10 +601,10 @@ class RequestHandler implements Connection.ResponseCallback {
         }
 
         Host queriedHost = current;
+        // If a query times out, we consider that the host is unstable, so we defunct
+        // the connection to mark it down.
+        DriverException timeoutException = new DriverException("Timed out waiting for server response");
         try {
-            // If a query times out, we consider that the host is unstable, so we defunct
-            // the connection to mark it down.
-            DriverException timeoutException = new DriverException("Timed out waiting for server response");
             connection.defunct(timeoutException);
 
             logError(connection.address, timeoutException);
@@ -608,8 +613,8 @@ class RequestHandler implements Connection.ResponseCallback {
             // This shouldn't happen, but if it does, we want to signal the callback, not let him hang indefinitively
             setFinalException(null, new DriverInternalError("An unexpected error happened while handling timeout", e));
         } finally {
-            if (queriedHost != null)
-                manager.cluster.manager.reportLatency(queriedHost, statement, latency, LatencyTracker.QueryResult.TIMEOUT);
+            if (queriedHost != null && statement != null)
+                manager.cluster.manager.reportLatency(queriedHost, statement, timeoutException, latency);
         }
         return true;
     }

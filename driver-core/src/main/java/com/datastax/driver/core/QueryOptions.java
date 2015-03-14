@@ -38,21 +38,39 @@ public class QueryOptions {
     public static final int DEFAULT_FETCH_SIZE = 5000;
 
     /**
-     * The default threshold for slow queries to be logged by the driver.
+     * The default threshold in milliseconds beyond which queries are considered 'slow'
+     * and logged as such by the driver.
      */
     public static final long DEFAULT_SLOW_QUERY_THRESHOLD_MS = 5000;
+
+    /**
+     * The default maximum length of a CQL query string that can be logged verbatim
+     * by the driver. Query strings longer than this value will be truncated
+     * when logged.
+     */
+    public static final int DEFAULT_MAX_QUERY_STRING_LENGTH = 500;
+
+    /**
+     * The default maximum length of a query parameter value that can be logged verbatim
+     * by the driver. Parameter values longer than this value will be truncated
+     * when logged.
+     */
+    public static final int DEFAULT_MAX_PARAMETER_VALUE_LENGTH = 50;
+
 
     private volatile ConsistencyLevel consistency = DEFAULT_CONSISTENCY_LEVEL;
     private volatile ConsistencyLevel serialConsistency = DEFAULT_SERIAL_CONSISTENCY_LEVEL;
     private volatile int fetchSize = DEFAULT_FETCH_SIZE;
-    private volatile long slowQueryLatencyThresholdMs = DEFAULT_SLOW_QUERY_THRESHOLD_MS;
-    private volatile boolean enableQueryLogger = false;
-    private volatile boolean logQueryParameters = false;
+    private volatile long slowQueryLatencyThresholdMillis = DEFAULT_SLOW_QUERY_THRESHOLD_MS;
+    private volatile int maxQueryStringLength = DEFAULT_MAX_QUERY_STRING_LENGTH;
+    private volatile int maxParameterValueLength = DEFAULT_MAX_PARAMETER_VALUE_LENGTH;
+
     private volatile Cluster.Manager manager;
 
     /**
-     * Creates a new {@code QueryOptions} instance using the {@code DEFAULT_CONSISTENCY_LEVEL},
-     * {@code DEFAULT_SERIAL_CONSISTENCY_LEVEL} and {@code DEFAULT_FETCH_SIZE}.
+     * Creates a new {@link QueryOptions} instance using the {@link #DEFAULT_CONSISTENCY_LEVEL},
+     * {@link #DEFAULT_SERIAL_CONSISTENCY_LEVEL}, {@link #DEFAULT_FETCH_SIZE} and
+     * {@link #DEFAULT_SLOW_QUERY_THRESHOLD_MS}.
      */
     public QueryOptions() {}
 
@@ -147,28 +165,19 @@ public class QueryOptions {
         return fetchSize;
     }
 
-    public QueryOptions setEnableQueryLogger(boolean enableQueryLogger) {
-        this.enableQueryLogger = enableQueryLogger;
-        return this;
-    }
-
-    public boolean isEnableQueryLogger() {
-        return enableQueryLogger;
-    }
-
     /**
      * Set the threshold in milliseconds beyond which queries are considered 'slow'
      * and logged as such by the driver.
      *
-     * @param slowQueryLatencyThresholdMs Slow queries threshold in milliseconds. It must be
-     * strictly positive.
-     * @return this {@code QueryOptions} instance.
-     * @throws IllegalArgumentException if {@code slowQueryLatencyThresholdMs &lte; 0}.
+     * @param slowQueryLatencyThresholdMillis Slow queries threshold in milliseconds. It must be
+     * positive or zero.
+     * @return this {@link QueryOptions} instance.
+     * @throws IllegalArgumentException if {@code slowQueryLatencyThresholdMillis < 0}.
      */
-    public QueryOptions setSlowQueryLatencyThresholdMs(long slowQueryLatencyThresholdMs) {
-        if (slowQueryLatencyThresholdMs <= 0)
-            throw new IllegalArgumentException("Invalid slowQueryLatencyThresholdMs, should be > 0, got " + slowQueryLatencyThresholdMs);
-        this.slowQueryLatencyThresholdMs = slowQueryLatencyThresholdMs;
+    public QueryOptions setSlowQueryLatencyThresholdMillis(long slowQueryLatencyThresholdMillis) {
+        if (slowQueryLatencyThresholdMillis < 0)
+            throw new IllegalArgumentException("Invalid slowQueryLatencyThresholdMillis, should be >= 0, got " + slowQueryLatencyThresholdMillis);
+        this.slowQueryLatencyThresholdMillis = slowQueryLatencyThresholdMillis;
         return this;
     }
 
@@ -179,17 +188,71 @@ public class QueryOptions {
      * @return the threshold in milliseconds beyond which queries are considered 'slow'
      * and logged as such by the driver.
      */
-    public long getSlowQueryLatencyThresholdMs() {
-        return slowQueryLatencyThresholdMs;
+    public long getSlowQueryLatencyThresholdMillis() {
+        return slowQueryLatencyThresholdMillis;
     }
 
-    public QueryOptions setLogQueryParameters(boolean logQueryParameters) {
-        this.logQueryParameters = logQueryParameters;
+    /**
+     * Set the maximum length of a CQL query string that can be logged verbatim
+     * by the driver. Query strings longer than this value will be truncated
+     * when logged.
+     *
+     * @param maxQueryStringLength The maximum length of a CQL query string
+     *                             that can be logged verbatim by the driver.
+     *                             It must be strictly positive or {@code -1},
+     *                             in which case the query is never truncated
+     *                             (use with care).
+     * @return this {@link QueryOptions} instance.
+     * @throws IllegalArgumentException if {@code maxQueryStringLength <= 0 && maxQueryStringLength != -1}.
+     */
+    public QueryOptions setMaxQueryStringLength(int maxQueryStringLength) {
+        if (maxQueryStringLength <= 0 && maxQueryStringLength != -1)
+            throw new IllegalArgumentException("Invalid maxQueryStringLength, should be > 0 or -1, got " + maxQueryStringLength);
+        this.maxQueryStringLength = maxQueryStringLength;
         return this;
     }
 
-    public boolean isLogQueryParameters() {
-        return logQueryParameters;
+    /**
+     * The maximum length of a CQL query string that can be logged verbatim
+     * by the driver. Query strings longer than this value will be truncated
+     * when logged.
+     *
+     * @return The maximum length of a CQL query string that can be logged verbatim
+     * by the driver.
+     */
+    public int getMaxQueryStringLength() {
+        return maxQueryStringLength;
     }
 
+    /**
+     * Set the maximum length of a query parameter value that can be logged verbatim
+     * by the driver. Parameter values longer than this value will be truncated
+     * when logged.
+     *
+     * @param maxParameterValueLength The maximum length of a query parameter value
+     *                                that can be logged verbatim by the driver.
+     *                                It must be strictly positive or {@code -1},
+     *                                in which case the parameter value is never truncated
+     *                                (use with care).
+     * @return this {@link QueryOptions} instance.
+     * @throws IllegalArgumentException if {@code maxParameterValueLength <= 0 && maxParameterValueLength != -1}.
+     */
+    public QueryOptions setMaxParameterValueLength(int maxParameterValueLength) {
+        if (maxParameterValueLength <= 0 && maxParameterValueLength != -1)
+            throw new IllegalArgumentException("Invalid maxParameterValueLength, should be > 0 or -1, got " + maxParameterValueLength);
+        this.maxParameterValueLength = maxParameterValueLength;
+        return this;
+    }
+
+    /**
+     * The maximum length of a query parameter value that can be logged verbatim
+     * by the driver. Parameter values longer than this value will be truncated
+     * when logged.
+     *
+     * @return The maximum length of a query parameter value that can be logged verbatim
+     * by the driver.
+     */
+    public int getMaxParameterValueLength() {
+        return maxParameterValueLength;
+    }
 }
